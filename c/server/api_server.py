@@ -32,7 +32,11 @@ def get_engine():
 class APIHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
-            self._json(200, {"status": "ok"})
+            eng = get_engine()
+            if eng and eng.proc and eng.proc.poll() is None:
+                self._json(200, {"status": "ok", "engine": "ready"})
+            else:
+                self._json(503, {"status": "error", "engine": "not running"})
         elif self.path == "/v1/models":
             self._json(200, {
                 "object": "list",
@@ -63,8 +67,8 @@ class APIHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def log_message(self, fmt, *args):
-        sys.stderr.write(f"[api] {self.address_string()} {fmt % args}\n")
+    def log_message(self, format, *args):
+        sys.stderr.write(f"[api] {self.address_string()} {format % args}\n")
 
 
 def main():
@@ -72,17 +76,43 @@ def main():
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--model", default=os.environ.get("COLI_MODEL", ""))
+    ap.add_argument("--ram", type=int, default=0, help="RAM budget in GB")
+    ap.add_argument("--temp", type=float, default=None, help="Sampling temperature")
+    ap.add_argument("--ngen", type=int, default=1024, help="Max tokens per response")
     args = ap.parse_args()
+
     if not args.model:
         sys.exit("Error: set COLI_MODEL or pass --model /path/to/glm52_i4")
-    print(f"colibrì API server starting on {args.host}:{args.port}")
-    print(f"Model: {args.model}")
+    if not os.path.exists(GLM):
+        sys.exit(f"Error: engine not built. Run 'cd c && make glm' first. (not found: {GLM})")
+
+    global _engine
+    from colibri_bridge import ColibriEngine
+    env_ov = {}
+    if args.ram:
+        env_ov["RAM_GB"] = str(args.ram)
+    if args.temp is not None:
+        env_ov["TEMP"] = str(args.temp)
+    if args.ngen:
+        env_ov["NGEN"] = str(args.ngen)
+
+    print(f"Starting colibrì engine (model: {args.model})...")
+    _engine = ColibriEngine(args.model, GLM, env_ov)
+    _engine.start()
+    print("Engine ready!")
+
+    print(f"colibrì API server on http://{args.host}:{args.port}")
+    print(f"  POST /v1/chat/completions")
+    print(f"  GET  /v1/models")
+    print(f"  GET  /health")
     server = HTTPServer((args.host, args.port), APIHandler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nShutting down...")
+    finally:
         server.shutdown()
+        _engine.stop()
 
 
 if __name__ == "__main__":
