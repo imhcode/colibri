@@ -165,8 +165,64 @@ class APIHandler(BaseHTTPRequestHandler):
             self._json(200, response)
 
     def _handle_chat_stream(self, eng, prompt, model_name):
-        """Placeholder — implemented in next task."""
-        pass
+        """Stream response as SSE (Server-Sent Events), OpenAI-compatible."""
+        completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+
+        def send_sse(data):
+            line = f"data: {json.dumps(data)}\n\n"
+            self.wfile.write(line.encode())
+            self.wfile.flush()
+
+        # Initial chunk: role
+        send_sse({
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": int(time.time()),
+            "model": model_name,
+            "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]
+        })
+
+        # Stream content chunks
+        def on_chunk(text):
+            send_sse({
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": int(time.time()),
+                "model": model_name,
+                "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": None}]
+            })
+
+        try:
+            eng.generate(prompt, on_chunk=on_chunk)
+        except Exception as e:
+            send_sse({
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": int(time.time()),
+                "model": model_name,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "error"}]
+            })
+            self.wfile.write(f"data: {json.dumps({'error': {'message': str(e)}})}\n\n".encode())
+            self.wfile.flush()
+            return
+
+        # Final chunk: finish_reason
+        send_sse({
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": int(time.time()),
+            "model": model_name,
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]
+        })
+        # Terminal sentinel
+        self.wfile.write(b"data: [DONE]\n\n")
+        self.wfile.flush()
 
     def _json(self, code, obj):
         body = json.dumps(obj).encode()
