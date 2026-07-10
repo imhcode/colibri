@@ -5,6 +5,7 @@ CLI per far girare GLM-5.2 (744B) in locale, su CPU, in ~15-26 GB di RAM.
 
   coli chat                 chat interattiva (carica il modello UNA volta)
   coli run "prompt"         generazione singola
+  coli serve                avvia server API OpenAI-compatible (--port 8080)
   coli info                 stato: modello, RAM, disco, config
   coli bench [task...]      benchmark di qualità (MMLU/HellaSwag/...)
   coli convert              converte GLM-5.2-FP8 -> int4 (streaming)
@@ -415,6 +416,24 @@ def cmd_convert(a):
     print(f"  {C.dim}[2/2] testa MTP a int8 (draft speculativi){C.r}")
     sys.exit(subprocess.call(mtp_cmd+["--mtp"]))
 
+def cmd_serve(a):
+    need_model(a.model)
+    banner(f"serve · {a.host}:{a.port}")
+    srv = os.path.join(HERE, "server", "api_server.py")
+    cmd = [sys.executable, srv,
+           "--host", a.host, "--port", str(a.port), "--model", a.model]
+    if a.ram:  cmd += ["--ram", str(a.ram)]
+    if a.ngen: cmd += ["--ngen", str(a.ngen)]
+    if a.temp is not None: cmd += ["--temp", str(a.temp)]
+    print(f"  {C.dim}OpenAI-compatible API server{C.r}")
+    print(f"  {C.dim}Endpoints:{C.r}")
+    print(f"    {C.gray}POST /v1/chat/completions{C.r}")
+    print(f"    {C.gray}GET  /v1/models{C.r}")
+    print(f"    {C.gray}GET  /health{C.r}")
+    print()
+    sys.exit(subprocess.call(cmd))
+
+
 def main():
     common=argparse.ArgumentParser(add_help=False)
     common.add_argument("--model", default=DEF_MODEL); common.add_argument("--ram", type=int, default=0)  # 0 = auto (il motore usa l'88% della RAM disponibile)
@@ -431,9 +450,12 @@ def main():
     pc=sub.add_parser("convert", parents=[common]); pc.add_argument("--repo",default="zai-org/GLM-5.2-FP8")
     pc.add_argument("--ebits",type=int,default=4); pc.add_argument("--io-bits",type=int,default=8); pc.add_argument("--xbits",type=int,default=0)
     pc.add_argument("--no-mtp",action="store_true",help="salta la testa MTP (niente draft speculativi)")
+    ps=sub.add_parser("serve", parents=[common])
+    ps.add_argument("--host", default="0.0.0.0")
+    ps.add_argument("--port", type=int, default=8080)
     a=ap.parse_args()
     {"build":cmd_build,"info":cmd_info,"run":cmd_run,"chat":cmd_chat,"bench":cmd_bench,
-     "convert":cmd_convert}.get(a.cmd, lambda _:(banner(),print(__doc__)))(a)
+     "convert":cmd_convert,"serve":cmd_serve}.get(a.cmd, lambda _:(banner(),print(__doc__)))(a)
 
 if __name__=="__main__":
     signal.signal(signal.SIGINT, signal.default_int_handler)
