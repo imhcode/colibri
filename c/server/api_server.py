@@ -29,6 +29,41 @@ def get_engine():
     return _engine
 
 
+def build_prompt_from_messages(messages):
+    """
+    Convert OpenAI messages array to GLM-5.2 formatted prompt.
+
+    GLM-5.2 chat template:
+      [gMASK]<sop><|user|>{msg1}<|assistant|>{reply1}
+      <|user|>{msg2}<|assistant|>
+
+    With <think></think> for direct response (nothink mode),
+    or <think> for reasoning mode.
+
+    System messages are prepended to the first user message since
+    GLM-5.2 has no explicit system role.
+    """
+    think_mode = os.environ.get("COLI_THINK", "0") == "1"
+    think_tag = "<think>" if think_mode else "<think></think>"
+
+    parts = ["[gMASK]<sop>"]
+    system_prefix = ""
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+
+        if role == "system":
+            system_prefix = content + "\n\n"
+        elif role == "user":
+            parts.append(f"<|user|>{system_prefix}{content}")
+            system_prefix = ""
+        elif role == "assistant":
+            parts.append(f"<|assistant|>{content}")
+
+    parts.append(f"<|assistant|>{think_tag}")
+    return "".join(parts)
+
+
 class APIHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/health":
@@ -88,7 +123,7 @@ def main():
 
     global _engine
     from colibri_bridge import ColibriEngine
-    env_ov = {}
+    env_ov = {"CHAT_TEMPLATE": "0"}  # we build the template ourselves
     if args.ram:
         env_ov["RAM_GB"] = str(args.ram)
     if args.temp is not None:
