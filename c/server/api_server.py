@@ -114,6 +114,21 @@ class APIHandler(BaseHTTPRequestHandler):
         stream = body.get("stream", False)
         model_name = body.get("model", "colibri-glm-5.2")
 
+        # Temperature and max_tokens are server-level (engine reads at startup).
+        # We accept them in the request for OpenAI compatibility but log a note.
+        req_temp = body.get("temperature", None)
+        if req_temp is not None:
+            sys.stderr.write(
+                f"[api] note: per-request temperature={req_temp} ignored "
+                f"(server temp={os.environ.get('TEMP', 'default')})\n"
+            )
+        req_max_tokens = body.get("max_tokens", None)
+        if req_max_tokens is not None:
+            sys.stderr.write(
+                f"[api] note: per-request max_tokens={req_max_tokens} ignored "
+                f"(server ngen={os.environ.get('NGEN', 'default')})\n"
+            )
+
         # Build prompt and reset engine context for stateless REST semantic
         prompt = build_prompt_from_messages(messages)
         eng.reset()
