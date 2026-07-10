@@ -92,7 +92,81 @@ class APIHandler(BaseHTTPRequestHandler):
             self._json(404, {"error": {"message": "Not found"}})
 
     def _handle_chat(self):
-        pass  # implemented in later tasks
+        eng = get_engine()
+        if not eng or not eng.proc or eng.proc.poll() is not None:
+            self._json(503, {"error": {"message": "Engine not available", "type": "server_error"}})
+            return
+
+        # Parse request body
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length)
+            body = json.loads(raw)
+        except Exception as e:
+            self._json(400, {"error": {"message": f"Invalid JSON: {e}", "type": "invalid_request_error"}})
+            return
+
+        messages = body.get("messages")
+        if not messages:
+            self._json(400, {"error": {"message": "messages is required", "type": "invalid_request_error"}})
+            return
+
+        stream = body.get("stream", False)
+        model_name = body.get("model", "colibri-glm-5.2")
+
+        # Build prompt and reset engine context for stateless REST semantic
+        prompt = build_prompt_from_messages(messages)
+        eng.reset()
+
+        if stream:
+            self._handle_chat_stream(eng, prompt, model_name)
+        else:
+            # Non-streaming: collect all chunks, return one JSON response
+            chunks = []
+
+            def collect(text):
+                chunks.append(text)
+
+            try:
+                stats = eng.generate(prompt, on_chunk=collect)
+            except Exception as e:
+                self._json(500, {"error": {"message": str(e), "type": "server_error"}})
+                return
+
+            full_text = "".join(chunks)
+            completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+
+            response = {
+                "id": completion_id,
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": model_name,
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": full_text,
+                    },
+                    "finish_reason": "stop",
+                }],
+                "usage": {
+                    "prompt_tokens": -1,
+                    "completion_tokens": stats.get("tok", 0),
+                    "total_tokens": -1,
+                },
+                # colibrì-specific stats in extension field
+                "colibri_stats": {
+                    "tok": stats.get("tok", 0),
+                    "tps": round(stats.get("tps", 0.0), 2),
+                    "expert_hit": round(stats.get("hit", 0.0), 1),
+                    "rss_gb": round(stats.get("rss", 0.0), 2),
+                }
+            }
+            self._json(200, response)
+
+    def _handle_chat_stream(self, eng, prompt, model_name):
+        """Placeholder — implemented in next task."""
+        pass
 
     def _json(self, code, obj):
         body = json.dumps(obj).encode()
